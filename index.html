@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#101318">
+<title>Live Event Sound Meter + RTA</title>
+<style>
+:root{color-scheme:dark;--bg:#101318;--panel:#1a2029;--muted:#a8b1c0;--line:#303947;--accent:#9be564;--blue:#69b7ff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:#f5f7fa;font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{max-width:760px;margin:auto;padding:calc(14px + env(safe-area-inset-top)) 14px calc(28px + env(safe-area-inset-bottom))}
+h1{font-size:22px;margin:4px 0 5px}p{color:var(--muted);line-height:1.4;margin:6px 0 14px;font-size:13px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:10px}.status{font-size:12px;border:1px solid var(--line);padding:6px 9px;border-radius:20px;color:var(--muted)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px;margin-top:10px}
+.label{font-size:12px;color:var(--muted)}.big{font-size:clamp(34px,10vw,54px);font-weight:700;letter-spacing:-1.5px;line-height:1.1;margin:8px 0 4px;font-variant-numeric:tabular-nums}.unit{font-size:12px;color:var(--muted)}
+.minirow{display:flex;justify-content:space-between;gap:8px;font-size:13px;color:var(--muted);margin-top:12px}.minirow strong{color:#fff;font-variant-numeric:tabular-nums}
+button,select,input{font:inherit;color:#fff;background:#252d39;border:1px solid #414c5d;border-radius:10px;padding:11px 12px;min-height:44px}
+button{cursor:pointer;font-weight:650}button.primary{background:var(--accent);border-color:var(--accent);color:#10170d}button:disabled{opacity:.5}
+.controls{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}.controls button{width:100%}
+.sectionhead{display:flex;justify-content:space-between;align-items:center;gap:8px}.sectionhead h2{font-size:16px;margin:0}.sectionhead select{padding:7px 9px;min-height:36px;font-size:13px;max-width:55%}
+canvas{display:block;width:100%;height:230px;margin-top:12px;border-radius:9px;background:#11161d}
+.legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted);margin-top:8px}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;background:var(--accent)}
+.formrow{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.field label{display:block;color:var(--muted);font-size:12px;margin-bottom:6px}.field input,.field select{width:100%}
+.note{font-size:12px;color:var(--muted);line-height:1.45}.warning{border-color:#66522b;background:#241f15}.warning strong{color:#ffd37b}
+table{width:100%;border-collapse:collapse;font-size:12px;margin-top:10px}th,td{text-align:right;padding:7px 4px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}th:first-child,td:first-child{text-align:left}
+@media(min-width:600px){.big{font-size:52px}}
+</style>
+</head>
+<body><main>
+<div class="top"><div><h1>Live Event Sound Meter</h1><div class="label">dB SPL estimate + real-time analyzer</div></div><div id="status" class="status">MIC OFF</div></div>
+<p>Designed for quick live-event checks. Keep the phone in a consistent position and use a known acoustic calibrator or trusted meter to calibrate.</p>
+<div class="grid">
+ <div class="panel"><div class="label">A-weighted level</div><div id="aLevel" class="big">--.-</div><div class="unit">dB SPL · LAeq (running)</div><div class="minirow"><span>Fast level</span><strong id="aFast">--.- dBA</strong></div><div class="minirow"><span>Max Fast</span><strong id="aMax">--.- dBA</strong></div></div>
+ <div class="panel"><div class="label">C-weighted level</div><div id="cLevel" class="big">--.-</div><div class="unit">dB SPL · LCeq (running)</div><div class="minirow"><span>Fast level</span><strong id="cFast">--.- dBC</strong></div><div class="minirow"><span>Max Fast</span><strong id="cMax">--.- dBC</strong></div></div>
+</div>
+<div class="panel">
+ <div class="sectionhead"><h2>Measurement controls</h2><select id="response"><option value="fast">Fast display</option><option value="slow">Slow display</option></select></div>
+ <div class="controls"><button id="start" class="primary">Start microphone</button><button id="stop" disabled>Stop measurement</button><button id="reset">Reset Leq / Max</button><button id="csv">Export CSV log</button></div>
+ <div class="formrow">
+  <div class="field"><label for="cal">Calibration offset (dB)</label><input id="cal" type="number" value="0" step="0.1"></div>
+  <div class="field"><label for="rate">RTA resolution</label><select id="rate"><option value="third">1/3 octave</option><option value="fft">FFT spectrum</option></select></div>
+ </div>
+ <div class="minirow"><span>Elapsed time</span><strong id="elapsed">00:00</strong></div>
+</div>
+<div class="panel">
+ <div class="sectionhead"><h2>Real-time analyzer</h2><div class="label" id="rtaLabel">1/3-octave bands</div></div>
+ <canvas id="rta" aria-label="Real-time frequency analyzer"></canvas>
+ <div class="legend"><span><i class="dot"></i>Current spectrum</span><span>Frequency axis is logarithmic</span></div>
+ <div id="bandTable"></div>
+</div>
+<div class="panel warning"><strong>Accuracy notice</strong><p style="margin-bottom:0;color:#d9d0bd">This browser prototype is not a certified sound-level meter. iPhone microphone sensitivity, automatic gain control, noise suppression, case/hand placement and frequency response can affect readings. The A/C weighting filters and spectrum are intended as an engineering prototype, not proof of compliance with IEC 61672. Do not use it for legal noise compliance or hearing-safety decisions without calibration and validation against a suitable meter.</p></div>
+<p>Tip: for better event measurements, use a supported calibrated external measurement microphone/interface and verify the full signal path. Keep the phone away from loudspeaker airflow and do not cover its microphones.</p>
+</main>
+<script>
+(() => {
+const $ = id => document.getElementById(id);
+const canvas = $('rta'), ctx = canvas.getContext('2d');
+let stream=null, audioCtx=null, source=null, analyser=null, proc=null, running=false;
+let startTime=0, timer=null, log=[], samples=0, sumA=0, sumC=0, maxA=-Infinity,maxC=-Infinity;
+let smoothA=0,smoothC=0, lastA=-Infinity,lastC=-Infinity, latestBands=[], latestFFT=[], raf=0;
+let cal=0, sampleRate=48000, fftSize=8192, timeData=null, freqData=null;
+const centers=[20,25,31.5,40,50,63,80,100,125,160,200,250,315,400,500,630,800,1000,1250,1600,2000,2500,3150,4000,5000,6300,8000,10000,12500,16000];
+const fmt = x => Number.isFinite(x) ? x.toFixed(1) : '--.-';
+function db(rms){return 20*Math.log10(Math.max(rms,1e-9))+cal;}
+function setStatus(s){$('status').textContent=s;}
+function resizeCanvas(){const dpr=window.devicePixelRatio||1;const r=canvas.getBoundingClientRect();canvas.width=Math.max(320,Math.round(r.width*dpr));canvas.height=Math.round(r.height*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);drawRTA();}
+window.addEventListener('resize',resizeCanvas);
+function biquadCoeffs(type,fc,Q,fs){
+ const w=2*Math.PI*fc/fs, c=Math.cos(w), s=Math.sin(w), alpha=s/(2*Q);
+ let b0,b1,b2,a0,a1,a2;
+ if(type==='highpass'){b0=(1+c)/2;b1=-(1+c);b2=(1+c)/2;a0=1+alpha;a1=-2*c;a2=1-alpha;}
+ else if(type==='lowpass'){b0=(1-c)/2;b1=1-c;b2=(1-c)/2;a0=1+alpha;a1=-2*c;a2=1-alpha;}
+ else {b0=1;b1=0;b2=0;a0=1;a1=0;a2=0;}
+ return [b0/a0,b1/a0,b2/a0,a1/a0,a2/a0];
+}
+class Biquad{
+ constructor(co){this.set(co);this.x1=this.x2=this.y1=this.y2=0;}
+ set(c){[this.b0,this.b1,this.b2,this.a1,this.a2]=c;}
+ process(x){const y=this.b0*x+this.b1*this.x1+this.b2*this.x2-this.a1*this.y1-this.a2*this.y2;this.x2=this.x1;this.x1=x;this.y2=this.y1;this.y1=y;return y;}
+}
+function weightingFilters(fs){
+ // Approximate IEC-style analog weighting curves via bilinear-transform pole/zero design.
+ // A-weighting analog transfer: K*s^4 / ((s+w1)^2(s+w2)(s+w3)(s+w4)^2)
+ // C-weighting: K*s^2 / ((s+w1)^2(s+w2)(s+w3)^2)
+ function polyMul(a,b){let out=Array(a.length+b.length-1).fill(0);a.forEach((v,i)=>b.forEach((w,j)=>out[i+j]+=v*w));return out;}
+ function analogWeight(type){
+   const w1=2*Math.PI*20.598997,w2=2*Math.PI*107.65265,w3=2*Math.PI*737.86223,w4=2*Math.PI*12194.217;
+   let num,den;
+   if(type==='A'){num=[1,0,0,0,0];den=[1];for(const p of [[1,2*w1,w1*w1],[1,w2],[1,w3],[1,2*w4,w4*w4]])den=polyMul(den,p);}
+   else {num=[1,0,0];den=[1];for(const p of [[1,2*w1,w1*w1],[1,w2],[1,2*w4,w4*w4]])den=polyMul(den,p);}
+   return {num,den};
+ }
+ // A stable digital approximation using cascaded high-pass/low-pass sections.
+ // This is intentionally labeled approximate; final standards-grade coefficients need validation.
+ const a=[new Biquad(biquadCoeffs('highpass',20.6,0.707,fs)),new Biquad(biquadCoeffs('highpass',20.6,0.707,fs)),new Biquad(biquadCoeffs('highpass',107.7,0.707,fs)),new Biquad(biquadCoeffs('lowpass',12194,0.707,fs)),new Biquad(biquadCoeffs('lowpass',12194,0.707,fs))];
+ const c=[new Biquad(biquadCoeffs('highpass',20.6,0.707,fs)),new Biquad(biquadCoeffs('highpass',20.6,0.707,fs)),new Biquad(biquadCoeffs('lowpass',12194,0.707,fs)),new Biquad(biquadCoeffs('lowpass',12194,0.707,fs))];
+ return {a,c};
+}
+let filters=null, sumSqA=0,sumSqC=0, count=0, lastSampleTime=0, slowA=-Infinity,slowC=-Infinity;
+function resetMeasures(){sumA=0;sumC=0;samples=0;sumSqA=0;sumSqC=0;count=0;maxA=maxC=-Infinity;slowA=slowC=-Infinity;log=[];startTime=performance.now();$('elapsed').textContent='00:00';updateNumbers();}
+function updateNumbers(){
+ $('aLevel').textContent=fmt(count?10*Math.log10(sumSqA/count)+cal:-Infinity);
+ $('cLevel').textContent=fmt(count?10*Math.log10(sumSqC/count)+cal:-Infinity);
+ $('aFast').textContent=fmt(lastA)+' dBA';$('cFast').textContent=fmt(lastC)+' dBC';
+ $('aMax').textContent=fmt(maxA)+' dBA';$('cMax').textContent=fmt(maxC)+' dBC';
+}
+async function start(){
+ try{
+  if(!navigator.mediaDevices?.getUserMedia) throw new Error('Microphone access requires an HTTPS website opened in Safari.');
+  stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false},video:false});
+  audioCtx=new (window.AudioContext||window.webkitAudioContext)(); await audioCtx.resume();sampleRate=audioCtx.sampleRate;
+  source=audioCtx.createMediaStreamSource(stream);analyser=audioCtx.createAnalyser();analyser.fftSize=fftSize;analyser.smoothingTimeConstant=0;
+  source.connect(analyser);timeData=new Float32Array(analyser.fftSize);freqData=new Float32Array(analyser.frequencyBinCount);
+  filters=weightingFilters(sampleRate);resetMeasures();running=true;lastSampleTime=performance.now();
+  $('start').disabled=true;$('stop').disabled=false;setStatus('MIC LIVE');timer=setInterval(tick,100);drawLoop();
+ }catch(e){alert('Could not start microphone: '+e.message+'\n\nOpen the app from its HTTPS website in Safari and allow microphone access.');setStatus('MIC BLOCKED');}
+}
+function stop(){running=false;if(timer)clearInterval(timer);cancelAnimationFrame(raf);if(stream)stream.getTracks().forEach(t=>t.stop());if(audioCtx)audioCtx.close();stream=audioCtx=source=analyser=null;$('start').disabled=false;$('stop').disabled=true;setStatus('MIC OFF');}
+function tick(){
+ if(!running||!analyser)return;
+ cal=parseFloat($('cal').value)||0;
+ analyser.getFloatTimeDomainData(timeData);
+ let sa=0,sc=0,sraw=0;
+ for(let i=0;i<timeData.length;i++){
+  const x=timeData[i];sraw+=x*x;const a=filters.a.reduce((v,f)=>f.process(v),x),c=filters.c.reduce((v,f)=>f.process(v),x);sa+=a*a;sc+=c*c;
+ }
+ const ra=Math.sqrt(sa/timeData.length),rc=Math.sqrt(sc/timeData.length);
+ // Browser microphone samples are normalized PCM, not pascals. A user-entered offset anchors the estimate.
+ lastA=db(ra);lastC=db(rc);
+ const now=performance.now(),dt=Math.max(.01,(now-lastSampleTime)/1000);lastSampleTime=now;
+ const alphaF=1-Math.exp(-dt/0.125),alphaS=1-Math.exp(-dt/1.0);
+ smoothA=Number.isFinite(smoothA)?smoothA+alphaF*(lastA-smoothA):lastA;
+ smoothC=Number.isFinite(smoothC)?smoothC+alphaF*(lastC-smoothC):lastC;
+ slowA=Number.isFinite(slowA)?slowA+alphaS*(lastA-slowA):lastA;slowC=Number.isFinite(slowC)?slowC+alphaS*(lastC-slowC):lastC;
+ const useSlow=$('response').value==='slow';const da=useSlow?slowA:smoothA,dc=useSlow?slowC:smoothC;
+ // Keep the primary readout as running energy average, not arithmetic dB average.
+ sumSqA+=ra*ra;sumSqC+=rc*rc;count++;
+ maxA=Math.max(maxA,da);maxC=Math.max(maxC,dc);
+ $('aFast').textContent=fmt(da)+' dBA';$('cFast').textContent=fmt(dc)+' dBC';
+ $('aMax').textContent=fmt(maxA)+' dBA';$('cMax').textContent=fmt(maxC)+' dBC';
+ $('aLevel').textContent=fmt(10*Math.log10(Math.max(sumSqA/count,1e-18))+cal);
+ $('cLevel').textContent=fmt(10*Math.log10(Math.max(sumSqC/count,1e-18))+cal);
+ const elapsed=Math.floor((now-startTime)/1000);$('elapsed').textContent=String(Math.floor(elapsed/60)).padStart(2,'0')+':'+String(elapsed%60).padStart(2,'0');
+ analyser.getFloatFrequencyData(freqData);latestFFT=Array.from(freqData);
+ latestBands=centers.map(fc=>{const lo=fc/Math.pow(2,1/6),hi=fc*Math.pow(2,1/6);let p=0,n=0;for(let i=0;i<freqData.length;i++){const f=i*sampleRate/fftSize;if(f>=lo&&f<hi&&Number.isFinite(freqData[i])){p+=Math.pow(10,freqData[i]/10);n++;}}return n?10*Math.log10(p/n)+cal:-120;});
+ log.push({time:new Date().toISOString(),LAeq:10*Math.log10(Math.max(sumSqA/count,1e-18))+cal,LCeq:10*Math.log10(Math.max(sumSqC/count,1e-18))+cal,LAF:da,LCF:dc});
+ if(log.length>36000)log.shift();
+ drawRTA();
+}
+function drawLoop(){if(!running)return;raf=requestAnimationFrame(drawLoop);}
+function drawRTA(){
+ const dpr=window.devicePixelRatio||1,w=canvas.width/dpr,h=canvas.height/dpr;if(!w||!h)return;
+ ctx.clearRect(0,0,w,h);ctx.fillStyle='#11161d';ctx.fillRect(0,0,w,h);
+ const left=39,right=8,top=12,bottom=29,pw=w-left-right,ph=h-top-bottom;
+ const fmin=20,fmax=20000;const xFor=f=>left+Math.log(f/fmin)/Math.log(fmax/fmin)*pw;
+ const minDb=-90,maxDb=0;
+ ctx.font='10px -apple-system, sans-serif';ctx.textAlign='right';ctx.textBaseline='middle';
+ for(let dbv=-80;dbv<=0;dbv+=20){const y=top+(maxDb-dbv)/(maxDb-minDb)*ph;ctx.strokeStyle='#29313d';ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(w-right,y);ctx.stroke();ctx.fillStyle='#9ca8b8';ctx.fillText(dbv,left-7,y);}
+ const ticks=[20,50,100,200,500,1000,2000,5000,10000,20000];ctx.textAlign='center';ctx.textBaseline='top';
+ for(const f of ticks){const x=xFor(f);ctx.strokeStyle='#222b36';ctx.beginPath();ctx.moveTo(x,top);ctx.lineTo(x,h-bottom);ctx.stroke();ctx.fillStyle='#9ca8b8';ctx.fillText(f>=1000?(f/1000)+'k':String(f),x,h-bottom+7);}
+ const valY=v=>top+(maxDb-Math.max(minDb,Math.min(maxDb,v)))/(maxDb-minDb)*ph;
+ if($('rate').value==='third'&&latestBands.length){
+  const bw=pw/latestBands.length*.72;ctx.fillStyle='#9be564';
+  latestBands.forEach((v,i)=>{const x=xFor(centers[i])-bw/2,y=valY(v);ctx.fillRect(x,y,bw,top+ph-y);});
+  $('rtaLabel').textContent='1/3-octave bands';
+ } else if(latestFFT.length){
+  ctx.strokeStyle='#9be564';ctx.lineWidth=1.6;ctx.beginPath();let begun=false;
+  for(let i=1;i<latestFFT.length;i++){const f=i*sampleRate/fftSize;if(f<fmin||f>fmax)continue;const x=xFor(f),y=valY(latestFFT[i]+cal);if(!begun){ctx.moveTo(x,y);begun=true;}else ctx.lineTo(x,y);}
+  ctx.stroke();$('rtaLabel').textContent='FFT spectrum';
+ }
+ if(!running&&!latestBands.length){ctx.fillStyle='#9ca8b8';ctx.textAlign='center';ctx.fillText('Start microphone to view spectrum',w/2,h/2);}
+ if(latestBands.length){
+  let indices=[0,5,10,15,17,20,23,26,29].filter(i=>i<centers.length);
+  $('bandTable').innerHTML='<table><thead><tr><th>Band</th><th>Level (dB estimate)</th></tr></thead><tbody>'+indices.map(i=>'<tr><td>'+centers[i]+' Hz</td><td>'+fmt(latestBands[i])+'</td></tr>').join('')+'</tbody></table>';
+ }
+}
+$('start').addEventListener('click',start);$('stop').addEventListener('click',stop);$('reset').addEventListener('click',()=>{resetMeasures();});$('rate').addEventListener('change',drawRTA);
+$('csv').addEventListener('click',()=>{if(!log.length){alert('No measurements to export yet. Start the microphone first.');return;}const cols=['time','LAeq','LCeq','LAF','LCF'];const csv=[cols.join(','),...log.map(r=>cols.map(c=>r[c]).join(','))].join('\n');const blob=new Blob([csv],{type:'text/csv'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='live-event-sound-log.csv';a.click();URL.revokeObjectURL(url);});
+resetMeasures();resizeCanvas();
+})();
+</script></body></html>
